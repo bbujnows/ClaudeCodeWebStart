@@ -211,13 +211,21 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("builder");
   const [refSearch, setRefSearch] = useState("");
   const [copied, setCopied] = useState(false);
-  const [savedFields, setSavedFields] = useState([]);
+  const [savedFields, setSavedFields] = useState(() => {
+    try { const raw = localStorage.getItem("workdayCalcFields_v1"); return raw ? JSON.parse(raw) : []; }
+    catch { return []; }
+  });
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [saveNote, setSaveNote] = useState("");
   const [saveManualDeps, setSaveManualDeps] = useState([]);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [expandedDeps, setExpandedDeps] = useState({});
+
+  useEffect(() => {
+    try { localStorage.setItem("workdayCalcFields_v1", JSON.stringify(savedFields)); }
+    catch {}
+  }, [savedFields]);
 
   const FUNCTIONS = useMemo(() => buildFunctions(savedFields), [savedFields]);
   const ALL_FUNCTIONS = useMemo(() => Object.entries(FUNCTIONS).flatMap(([cat,fns]) => fns.map(f=>({...f,category:cat}))), [FUNCTIONS]);
