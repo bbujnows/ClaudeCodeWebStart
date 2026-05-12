@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from "react";
+import { supabase } from "./supabaseClient";
 
 const OUTPUT_TYPE_MAP = {
   "Text": "text", "Numeric": "numeric", "Numeric / Currency": "numeric",
@@ -221,11 +222,67 @@ export default function App() {
   const [saveManualDeps, setSaveManualDeps] = useState([]);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [expandedDeps, setExpandedDeps] = useState({});
+  const [user, setUser] = useState(null);
+  const [syncStatus, setSyncStatus] = useState("idle");
+  const skipNextSync = useRef(false);
+
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!supabase || !user) { setSyncStatus("idle"); return; }
+    setSyncStatus("pulling");
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("user_field_libraries")
+        .select("fields")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (cancelled) return;
+      if (error) {
+        console.error("Failed to load cloud library:", error);
+      } else if (data && Array.isArray(data.fields) && data.fields.length > 0) {
+        skipNextSync.current = true;
+        setSavedFields(data.fields);
+      } else if (savedFields.length > 0) {
+        skipNextSync.current = true;
+        await supabase.from("user_field_libraries")
+          .upsert({ user_id: user.id, fields: savedFields });
+      } else {
+        skipNextSync.current = true;
+      }
+      if (!cancelled) setSyncStatus("synced");
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   useEffect(() => {
     try { localStorage.setItem("workdayCalcFields_v1", JSON.stringify(savedFields)); }
     catch {}
-  }, [savedFields]);
+    if (skipNextSync.current) { skipNextSync.current = false; return; }
+    if (supabase && user && syncStatus === "synced") {
+      supabase.from("user_field_libraries")
+        .upsert({ user_id: user.id, fields: savedFields })
+        .then(({ error }) => { if (error) console.error("Cloud sync failed:", error); });
+    }
+  }, [savedFields, user, syncStatus]);
+
+  const signIn = () => {
+    if (!supabase) return;
+    supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+  };
+  const signOut = () => { if (supabase) supabase.auth.signOut(); };
 
   const FUNCTIONS = useMemo(() => buildFunctions(savedFields), [savedFields]);
   const ALL_FUNCTIONS = useMemo(() => Object.entries(FUNCTIONS).flatMap(([cat,fns]) => fns.map(f=>({...f,category:cat}))), [FUNCTIONS]);
@@ -280,9 +337,22 @@ export default function App() {
 
   return (
     <div style={{fontFamily:"system-ui,sans-serif",maxWidth:980,margin:"0 auto",padding:"16px",color:"#1e293b"}}>
-      <div style={{background:"linear-gradient(135deg,#1e3a5f 0%,#0f5ea3 100%)",borderRadius:12,padding:"20px 24px",marginBottom:20,color:"white"}}>
-        <div style={{fontSize:20,fontWeight:700}}>⚙️ Workday Calculated Field Builder — Finance</div>
-        <div style={{fontSize:13,opacity:0.85,marginTop:4}}>Report Writer · 29 Functions · GL · AP · Procurement · Projects · Assets · Banking · Budget</div>
+      <div style={{background:"linear-gradient(135deg,#1e3a5f 0%,#0f5ea3 100%)",borderRadius:12,padding:"20px 24px",marginBottom:20,color:"white",display:"flex",justifyContent:"space-between",alignItems:"center",gap:16,flexWrap:"wrap"}}>
+        <div>
+          <div style={{fontSize:20,fontWeight:700}}>⚙️ Workday Calculated Field Builder — Finance</div>
+          <div style={{fontSize:13,opacity:0.85,marginTop:4}}>Report Writer · 29 Functions · GL · AP · Procurement · Projects · Assets · Banking · Budget</div>
+        </div>
+        {supabase && (user ? (
+          <div style={{display:"flex",alignItems:"center",gap:10,fontSize:12}}>
+            <div style={{opacity:0.9,textAlign:"right"}}>
+              <div style={{fontWeight:600}}>{user.email}</div>
+              <div style={{fontSize:11,opacity:0.8}}>{syncStatus==="pulling"?"Syncing…":syncStatus==="synced"?"☁️ Synced":""}</div>
+            </div>
+            <button onClick={signOut} style={{padding:"6px 12px",borderRadius:6,border:"1px solid rgba(255,255,255,0.4)",background:"transparent",color:"white",cursor:"pointer",fontSize:12,fontWeight:600}}>Sign out</button>
+          </div>
+        ) : (
+          <button onClick={signIn} style={{padding:"8px 16px",borderRadius:6,border:"none",background:"white",color:"#1e3a5f",cursor:"pointer",fontSize:13,fontWeight:600,whiteSpace:"nowrap"}}>Sign in with Google</button>
+        ))}
       </div>
 
       <div style={{display:"flex",gap:8,marginBottom:20}}>
